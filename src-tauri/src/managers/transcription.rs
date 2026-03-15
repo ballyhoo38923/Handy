@@ -414,6 +414,11 @@ impl TranscriptionManager {
         );
 
         let st = std::time::Instant::now();
+        let profile_total = std::time::Instant::now();
+
+        let audio_duration_secs = audio.len() as f32 / 16000.0;
+        eprintln!("[PROFILE] ── Handy transcribe() start ──");
+        eprintln!("[PROFILE] Audio received:       {} samples ({:.1}s @ 16kHz)", audio.len(), audio_duration_secs);
 
         debug!("Audio vector length: {}", audio.len());
 
@@ -424,6 +429,7 @@ impl TranscriptionManager {
         }
 
         // Check if model is loaded, if not try to load it
+        let t_model_wait = std::time::Instant::now();
         {
             // If the model is loading, wait for it to complete.
             let mut is_loading = self.is_loading.lock().unwrap();
@@ -436,6 +442,8 @@ impl TranscriptionManager {
                 return Err(anyhow::anyhow!("Model is not loaded for transcription."));
             }
         }
+        let model_wait_elapsed = t_model_wait.elapsed();
+        eprintln!("[PROFILE] Model wait:           {:.3}s", model_wait_elapsed.as_secs_f64());
 
         // Get current settings for configuration
         let settings = get_settings(&self.app_handle);
@@ -443,6 +451,7 @@ impl TranscriptionManager {
         // Perform transcription with the appropriate engine.
         // We use catch_unwind to prevent engine panics from poisoning the mutex,
         // which would make the app hang indefinitely on subsequent operations.
+        let t_engine = std::time::Instant::now();
         let result = {
             let mut engine_guard = self.lock_engine();
 
@@ -579,7 +588,11 @@ impl TranscriptionManager {
             }
         };
 
+        let engine_elapsed = t_engine.elapsed();
+        eprintln!("[PROFILE] Engine transcribe:     {:.3}s  (includes mutex acquire)", engine_elapsed.as_secs_f64());
+
         // Apply word correction if custom words are configured
+        let t_postproc = std::time::Instant::now();
         let corrected_result = if !settings.custom_words.is_empty() {
             apply_custom_words(
                 &result.text,
@@ -592,6 +605,8 @@ impl TranscriptionManager {
 
         // Filter out filler words and hallucinations
         let filtered_result = filter_transcription_output(&corrected_result);
+        let postproc_elapsed = t_postproc.elapsed();
+        eprintln!("[PROFILE] Post-processing:       {:.3}s  (custom words + filler filter)", postproc_elapsed.as_secs_f64());
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -599,6 +614,10 @@ impl TranscriptionManager {
         } else {
             ""
         };
+
+        let total_elapsed = profile_total.elapsed();
+        eprintln!("[PROFILE] ── Handy transcribe() total: {:.3}s ──", total_elapsed.as_secs_f64());
+
         info!(
             "Transcription completed in {}ms{}",
             (et - st).as_millis(),
