@@ -90,6 +90,8 @@ pub struct LLMPrompt {
     pub id: String,
     pub name: String,
     pub prompt: String,
+    #[serde(default)]
+    pub binding: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
@@ -331,6 +333,8 @@ pub struct AppSettings {
     pub auto_submit_key: AutoSubmitKey,
     #[serde(default = "default_post_process_enabled")]
     pub post_process_enabled: bool,
+    #[serde(default)]
+    pub show_post_process_diff: bool,
     #[serde(default = "default_post_process_provider_id")]
     pub post_process_provider_id: String,
     #[serde(default = "default_post_process_providers")]
@@ -563,6 +567,7 @@ fn default_post_process_prompts() -> Vec<LLMPrompt> {
         id: "default_improve_transcriptions".to_string(),
         name: "Improve Transcriptions".to_string(),
         prompt: "Clean this transcript:\n1. Fix spelling, capitalization, and punctuation errors\n2. Convert number words to digits (twenty-five → 25, ten percent → 10%, five dollars → $5)\n3. Replace spoken punctuation with symbols (period → ., comma → ,, question mark → ?)\n4. Remove filler words (um, uh, like as filler)\n5. Keep the language in the original version (if it was french, keep it in french for example)\n\nPreserve exact meaning and word order. Do not paraphrase or reorder content.\n\nReturn only the cleaned transcript.\n\nTranscript:\n${output}".to_string(),
+        binding: None,
     }]
 }
 
@@ -715,6 +720,7 @@ pub fn get_default_settings() -> AppSettings {
         post_process_models: default_post_process_models(),
         post_process_prompts: default_post_process_prompts(),
         post_process_selected_prompt_id: None,
+        show_post_process_diff: false,
         mute_while_recording: false,
         append_trailing_space: false,
         app_language: default_app_language(),

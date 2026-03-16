@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::AppHandle;
+use tauri::Emitter;
 use tauri::Manager;
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
@@ -445,12 +446,32 @@ impl ShortcutAction for TranscribeAction {
                             if post_process {
                                 show_processing_overlay(&ah);
                             }
+                            // Check for per-prompt hotkey override
+                            let pp_settings = if post_process {
+                                let mut s = settings.clone();
+                                if let Some(coordinator) = ah.try_state::<crate::TranscriptionCoordinator>() {
+                                    if let Some(override_id) = coordinator.get_prompt_override() {
+                                        s.post_process_selected_prompt_id = Some(override_id);
+                                    }
+                                }
+                                s
+                            } else {
+                                settings.clone()
+                            };
                             let processed = if post_process {
-                                post_process_transcription(&settings, &final_text).await
+                                post_process_transcription(&pp_settings, &final_text).await
                             } else {
                                 None
                             };
                             if let Some(processed_text) = processed {
+                                // Emit diff event if setting is enabled
+                                if settings.show_post_process_diff {
+                                    let _ = ah.emit("post-process-diff", serde_json::json!({
+                                        "raw": transcription.clone(),
+                                        "processed": processed_text.clone(),
+                                    }));
+                                }
+
                                 post_processed_text = Some(processed_text.clone());
                                 final_text = processed_text;
 

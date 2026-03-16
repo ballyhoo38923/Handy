@@ -355,17 +355,19 @@ fn parse_keyboard_implementation(s: &str) -> KeyboardImplementation {
 
 /// Unregister all shortcuts for the current implementation
 fn unregister_all_shortcuts(app: &AppHandle, implementation: KeyboardImplementation) {
-    let bindings = settings::get_bindings(app);
+    let settings = settings::get_settings(app);
 
-    for (id, binding) in bindings {
+    for (id, binding) in &settings.bindings {
         // Skip cancel shortcut as it's dynamically registered
         if id == "cancel" {
             continue;
         }
 
         let result = match implementation {
-            KeyboardImplementation::Tauri => tauri_impl::unregister_shortcut(app, binding),
-            KeyboardImplementation::HandyKeys => handy_keys::unregister_shortcut(app, binding),
+            KeyboardImplementation::Tauri => tauri_impl::unregister_shortcut(app, binding.clone()),
+            KeyboardImplementation::HandyKeys => {
+                handy_keys::unregister_shortcut(app, binding.clone())
+            }
         };
 
         if let Err(e) = result {
@@ -373,6 +375,30 @@ fn unregister_all_shortcuts(app: &AppHandle, implementation: KeyboardImplementat
                 "Failed to unregister shortcut '{}' during switch: {}",
                 id, e
             );
+        }
+    }
+
+    // Unregister per-prompt bindings
+    for prompt in &settings.post_process_prompts {
+        if let Some(binding_str) = &prompt.binding {
+            if !binding_str.trim().is_empty() {
+                let sb = ShortcutBinding {
+                    id: format!("post_process_prompt:{}", prompt.id),
+                    name: format!("Post-Process: {}", prompt.name),
+                    description: String::new(),
+                    default_binding: binding_str.clone(),
+                    current_binding: binding_str.clone(),
+                };
+                let result = match implementation {
+                    KeyboardImplementation::Tauri => tauri_impl::unregister_shortcut(app, sb),
+                    KeyboardImplementation::HandyKeys => {
+                        handy_keys::unregister_shortcut(app, sb)
+                    }
+                };
+                if let Err(e) = result {
+                    warn!("Failed to unregister per-prompt shortcut for '{}': {}", prompt.name, e);
+                }
+            }
         }
     }
 }
@@ -431,6 +457,37 @@ fn register_all_shortcuts_for_implementation(
                 "Failed to register shortcut '{}' for {:?}: {}",
                 id, implementation, e
             );
+        }
+    }
+
+    // Register per-prompt bindings
+    if current_settings.post_process_enabled {
+        for prompt in &current_settings.post_process_prompts {
+            if let Some(binding_str) = &prompt.binding {
+                if !binding_str.trim().is_empty() {
+                    let sb = ShortcutBinding {
+                        id: format!("post_process_prompt:{}", prompt.id),
+                        name: format!("Post-Process: {}", prompt.name),
+                        description: format!("Transcribe with '{}'", prompt.name),
+                        default_binding: binding_str.clone(),
+                        current_binding: binding_str.clone(),
+                    };
+                    let result = match implementation {
+                        KeyboardImplementation::Tauri => {
+                            tauri_impl::register_shortcut(app, sb)
+                        }
+                        KeyboardImplementation::HandyKeys => {
+                            handy_keys::register_shortcut(app, sb)
+                        }
+                    };
+                    if let Err(e) = result {
+                        error!(
+                            "Failed to register per-prompt shortcut for '{}': {}",
+                            prompt.name, e
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -792,6 +849,35 @@ pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Res
         }
     }
 
+    // Register or unregister per-prompt bindings
+    for prompt in &settings.post_process_prompts {
+        if let Some(binding_str) = &prompt.binding {
+            if !binding_str.trim().is_empty() {
+                let sb = ShortcutBinding {
+                    id: format!("post_process_prompt:{}", prompt.id),
+                    name: format!("Post-Process: {}", prompt.name),
+                    description: format!("Transcribe with '{}'", prompt.name),
+                    default_binding: binding_str.clone(),
+                    current_binding: binding_str.clone(),
+                };
+                if enabled {
+                    let _ = register_shortcut(&app, sb);
+                } else {
+                    let _ = unregister_shortcut(&app, sb);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_show_post_process_diff_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.show_post_process_diff = enabled;
+    settings::write_settings(&app, settings);
     Ok(())
 }
 
@@ -902,6 +988,7 @@ pub fn add_post_process_prompt(
         id: id.clone(),
         name,
         prompt,
+        binding: None,
     };
 
     settings.post_process_prompts.push(new_prompt.clone());
@@ -936,12 +1023,85 @@ pub fn update_post_process_prompt(
 
 #[tauri::command]
 #[specta::specta]
+pub fn set_prompt_binding(
+    app: AppHandle,
+    prompt_id: String,
+    binding: Option<String>,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+
+    // Unregister old binding if it exists
+    if let Some(prompt) = settings.post_process_prompts.iter().find(|p| p.id == prompt_id) {
+        if let Some(old_binding) = &prompt.binding {
+            if !old_binding.trim().is_empty() {
+                let sb = ShortcutBinding {
+                    id: format!("post_process_prompt:{}", prompt_id),
+                    name: String::new(),
+                    description: String::new(),
+                    default_binding: old_binding.clone(),
+                    current_binding: old_binding.clone(),
+                };
+                let _ = unregister_shortcut(&app, sb);
+            }
+        }
+    }
+
+    // Update the prompt's binding
+    let prompt = settings
+        .post_process_prompts
+        .iter_mut()
+        .find(|p| p.id == prompt_id)
+        .ok_or_else(|| format!("Prompt '{}' not found", prompt_id))?;
+
+    let prompt_name = prompt.name.clone();
+    prompt.binding = binding.clone();
+
+    settings::write_settings(&app, settings);
+
+    // Register new binding if provided and post-processing is enabled
+    if let Some(new_binding) = &binding {
+        if !new_binding.trim().is_empty() {
+            let settings = settings::get_settings(&app);
+            if settings.post_process_enabled {
+                let sb = ShortcutBinding {
+                    id: format!("post_process_prompt:{}", prompt_id),
+                    name: format!("Post-Process: {}", prompt_name),
+                    description: format!("Transcribe with '{}'", prompt_name),
+                    default_binding: new_binding.clone(),
+                    current_binding: new_binding.clone(),
+                };
+                register_shortcut(&app, sb)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn delete_post_process_prompt(app: AppHandle, id: String) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
 
     // Don't allow deleting the last prompt
     if settings.post_process_prompts.len() <= 1 {
         return Err("Cannot delete the last prompt".to_string());
+    }
+
+    // Unregister per-prompt binding if the prompt had one
+    if let Some(prompt) = settings.post_process_prompts.iter().find(|p| p.id == id) {
+        if let Some(binding_str) = &prompt.binding {
+            if !binding_str.trim().is_empty() {
+                let sb = ShortcutBinding {
+                    id: format!("post_process_prompt:{}", id),
+                    name: String::new(),
+                    description: String::new(),
+                    default_binding: binding_str.clone(),
+                    current_binding: binding_str.clone(),
+                };
+                let _ = unregister_shortcut(&app, sb);
+            }
+        }
     }
 
     // Find and remove the prompt

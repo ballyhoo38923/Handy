@@ -20,6 +20,8 @@ import { ApiKeyField } from "../PostProcessingSettingsApi/ApiKeyField";
 import { ModelSelect } from "../PostProcessingSettingsApi/ModelSelect";
 import { usePostProcessProviderState } from "../PostProcessingSettingsApi/usePostProcessProviderState";
 import { ShortcutInput } from "../ShortcutInput";
+import { ShowPostProcessDiffToggle } from "../ShowPostProcessDiffToggle";
+import { PromptHotkeyInput } from "../PromptHotkeyInput";
 import { useSettings } from "../../../hooks/useSettings";
 
 const PostProcessingSettingsApiComponent: React.FC = () => {
@@ -313,6 +315,7 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
                 placeholder={t(
                   "settings.postProcessing.prompts.promptInstructionsPlaceholder",
                 )}
+                persistKey="post-process-prompt-instructions"
               />
               <p
                 className="text-xs text-mid-gray/70"
@@ -320,6 +323,23 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
                   __html: t("settings.postProcessing.prompts.promptTip"),
                 }}
               />
+            </div>
+
+            <div className="space-y-2 flex flex-col">
+              <label className="text-sm font-semibold">
+                {t("settings.postProcessing.prompts.hotkeyLabel", "Hotkey")}
+              </label>
+              <PromptHotkeyInput
+                promptId={selectedPromptId}
+                currentBinding={selectedPrompt.binding ?? null}
+                onBindingChanged={() => refreshSettings()}
+              />
+              <p className="text-xs text-mid-gray/70">
+                {t(
+                  "settings.postProcessing.prompts.hotkeyDescription",
+                  "Assign a dedicated hotkey to transcribe and post-process with this prompt directly."
+                )}
+              </p>
             </div>
 
             <div className="flex gap-2 pt-2">
@@ -380,6 +400,7 @@ const PostProcessingSettingsPromptsComponent: React.FC = () => {
                 placeholder={t(
                   "settings.postProcessing.prompts.promptInstructionsPlaceholder",
                 )}
+                persistKey="post-process-prompt-instructions"
               />
               <p
                 className="text-xs text-mid-gray/70"
@@ -442,6 +463,10 @@ export const PostProcessingSettings: React.FC = () => {
 
       <SettingsGroup title={t("settings.postProcessing.prompts.title")}>
         <PostProcessingSettingsPrompts />
+      </SettingsGroup>
+
+      <SettingsGroup title={t("settings.postProcessing.diff.title", "Diff View")}>
+        <ShowPostProcessDiffToggle descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
     </div>
   );

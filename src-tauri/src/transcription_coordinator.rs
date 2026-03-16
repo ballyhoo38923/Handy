@@ -2,7 +2,7 @@ use crate::actions::ACTION_MAP;
 use crate::managers::audio::AudioRecordingManager;
 use log::{debug, error, warn};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -35,15 +35,31 @@ enum Stage {
 /// the async transcribe-paste pipeline.
 pub struct TranscriptionCoordinator {
     tx: Sender<Command>,
+    /// When a per-prompt hotkey fires, this holds the target prompt ID
+    /// so that `TranscribeAction::stop` can override which prompt is used.
+    prompt_override: Arc<Mutex<Option<String>>>,
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe" || id == "transcribe_with_post_process"
+    id == "transcribe"
+        || id == "transcribe_with_post_process"
+        || id.starts_with("post_process_prompt:")
+}
+
+/// Map per-prompt binding IDs to their ACTION_MAP key.
+fn action_key(binding_id: &str) -> &str {
+    if binding_id.starts_with("post_process_prompt:") {
+        "transcribe_with_post_process"
+    } else {
+        binding_id
+    }
 }
 
 impl TranscriptionCoordinator {
     pub fn new(app: AppHandle) -> Self {
         let (tx, rx) = mpsc::channel();
+        let prompt_override = Arc::new(Mutex::new(None));
+        let po = Arc::clone(&prompt_override);
 
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -71,6 +87,8 @@ impl TranscriptionCoordinator {
 
                             if push_to_talk {
                                 if is_pressed && matches!(stage, Stage::Idle) {
+                                    // Set prompt override before starting
+                                    set_override_for_binding(&po, &binding_id);
                                     start(&app, &mut stage, &binding_id, &hotkey_string);
                                 } else if !is_pressed
                                     && matches!(&stage, Stage::Recording(id) if id == &binding_id)
@@ -80,6 +98,7 @@ impl TranscriptionCoordinator {
                             } else if is_pressed {
                                 match &stage {
                                     Stage::Idle => {
+                                        set_override_for_binding(&po, &binding_id);
                                         start(&app, &mut stage, &binding_id, &hotkey_string);
                                     }
                                     Stage::Recording(id) if id == &binding_id => {
@@ -98,10 +117,12 @@ impl TranscriptionCoordinator {
                             if !matches!(stage, Stage::Processing)
                                 && (recording_was_active || matches!(stage, Stage::Recording(_)))
                             {
+                                *po.lock().unwrap() = None;
                                 stage = Stage::Idle;
                             }
                         }
                         Command::ProcessingFinished => {
+                            *po.lock().unwrap() = None;
                             stage = Stage::Idle;
                         }
                     }
@@ -113,7 +134,7 @@ impl TranscriptionCoordinator {
             }
         });
 
-        Self { tx }
+        Self { tx, prompt_override }
     }
 
     /// Send a keyboard/signal input event for a transcribe binding.
@@ -156,11 +177,25 @@ impl TranscriptionCoordinator {
             warn!("Transcription coordinator channel closed");
         }
     }
+
+    /// Returns the per-prompt override ID, if a per-prompt hotkey is active.
+    pub fn get_prompt_override(&self) -> Option<String> {
+        self.prompt_override.lock().unwrap().clone()
+    }
+}
+
+/// Set the prompt override based on the binding ID.
+/// Per-prompt bindings have the format `"post_process_prompt:<prompt_id>"`.
+fn set_override_for_binding(po: &Arc<Mutex<Option<String>>>, binding_id: &str) {
+    *po.lock().unwrap() = binding_id
+        .strip_prefix("post_process_prompt:")
+        .map(|id| id.to_string());
 }
 
 fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
-    let Some(action) = ACTION_MAP.get(binding_id) else {
-        warn!("No action in ACTION_MAP for '{binding_id}'");
+    let key = action_key(binding_id);
+    let Some(action) = ACTION_MAP.get(key) else {
+        warn!("No action in ACTION_MAP for '{key}' (binding: '{binding_id}')");
         return;
     };
     action.start(app, binding_id, hotkey_string);
@@ -175,8 +210,9 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
 }
 
 fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
-    let Some(action) = ACTION_MAP.get(binding_id) else {
-        warn!("No action in ACTION_MAP for '{binding_id}'");
+    let key = action_key(binding_id);
+    let Some(action) = ACTION_MAP.get(key) else {
+        warn!("No action in ACTION_MAP for '{key}' (binding: '{binding_id}')");
         return;
     };
     action.stop(app, binding_id, hotkey_string);

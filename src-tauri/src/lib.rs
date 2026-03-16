@@ -40,6 +40,7 @@ pub use transcription_coordinator::TranscriptionCoordinator;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 
 use crate::settings::get_settings;
@@ -278,6 +279,7 @@ pub fn run(cli_args: CliArgs) {
         shortcut::change_auto_submit_setting,
         shortcut::change_auto_submit_key_setting,
         shortcut::change_post_process_enabled_setting,
+        shortcut::change_show_post_process_diff_setting,
         shortcut::change_experimental_enabled_setting,
         shortcut::change_post_process_base_url_setting,
         shortcut::change_post_process_api_key_setting,
@@ -287,6 +289,7 @@ pub fn run(cli_args: CliArgs) {
         shortcut::add_post_process_prompt,
         shortcut::update_post_process_prompt,
         shortcut::delete_post_process_prompt,
+        shortcut::set_prompt_binding,
         shortcut::set_post_process_selected_prompt,
         shortcut::update_custom_words,
         shortcut::suspend_binding,
@@ -410,6 +413,7 @@ pub fn run(cli_args: CliArgs) {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -457,6 +461,13 @@ pub fn run(cli_args: CliArgs) {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+
+                // Save window size/position before hiding (plugin only saves on destroy,
+                // but we hide instead of destroying, so we must save explicitly)
+                if let Err(e) = window.app_handle().save_window_state(StateFlags::all()) {
+                    log::error!("Failed to save window state: {}", e);
+                }
+
                 let _res = window.hide();
 
                 let settings = get_settings(&window.app_handle());

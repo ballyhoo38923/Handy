@@ -1,12 +1,14 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { Toaster } from "sonner";
 import { useTranslation } from "react-i18next";
 import { platform } from "@tauri-apps/plugin-os";
+import { listen } from "@tauri-apps/api/event";
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
 } from "tauri-plugin-macos-permissions-api";
 import "./App.css";
+import { DiffModal } from "./components/DiffModal";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
@@ -43,9 +45,26 @@ function App() {
     (state) => state.refreshOutputDevices,
   );
   const hasCompletedPostOnboardingInit = useRef(false);
+  const [diffData, setDiffData] = useState<{
+    raw: string;
+    processed: string;
+  } | null>(null);
 
   useEffect(() => {
     checkOnboardingStatus();
+  }, []);
+
+  // Listen for post-process diff events from backend
+  useEffect(() => {
+    const unlisten = listen<{ raw: string; processed: string }>(
+      "post-process-diff",
+      (event) => {
+        setDiffData(event.payload);
+      }
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   // Initialize RTL direction when language changes
@@ -189,6 +208,13 @@ function App() {
       </div>
       {/* Fixed footer at bottom */}
       <Footer />
+      {diffData && (
+        <DiffModal
+          raw={diffData.raw}
+          processed={diffData.processed}
+          onClose={() => setDiffData(null)}
+        />
+      )}
     </div>
   );
 }
